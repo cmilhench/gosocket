@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <title></title>
+</head>
+
+<body>
+
+  <input type="text" placeholder="message" id="textbox">
+  <button id="button">Send</button>
+  <div id="box"></div>
+
+  <script>
+    function Client(url) {
+      if (!(this instanceof Client)) return new Client(url);
+      this.delay = 0;
+      this.open(url)
+    }
+    Client.prototype.open = function (url) {
+      var self = this;
+      var args = Array.prototype.slice.call(arguments);
+      self._socket = new WebSocket(url);
+      self._socket.onopen = function (event) {
+        self.delay = 0;
+        console.debug('WebSocket connected');
+      }
+      self._socket.onclose = function (event) {
+        if (event.code !== 1000) {
+          self.delay = Math.min(Math.max(self.delay *= 2, 0.5), 30); // 0.5, 1, 2, 4, 8, 16, 30, 30
+          window.setTimeout(function () { self.open.apply(self, args); }, self.delay * 1000);
+        }
+      }
+      self._socket.onmessage = function (event) { self.onmessage(event); }
+      return self;
+    }
+    Client.prototype.send = function (data, options) {
+      return this._socket.send(data, options)
+    }
+    Client.prototype.onmessage = function (event) {}
+
+    var c = new Client("ws://localhost:12345/socket");
+    c.onmessage = function (event) {
+      var box = document.createElement("div");
+      box.innerHTML = event.data;
+      document.getElementById("box").appendChild(box);
+    }
+    var button = document.getElementById("button");
+    button.addEventListener("click", function (event) {
+      var text = document.getElementById("textbox").value;
+      c.send(text);
+    });
+  </script>
+</body>
+
+</html>
