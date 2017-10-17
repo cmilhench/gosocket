@@ -11,35 +11,75 @@ import (
 
 // Client stores the client's socket and information such as username
 type Client struct {
+	server    *SocketServer
 	websocket *websocket.Conn
-	clientIP  string
+	send      chan string
+}
+
+func (c *Client) Read() {
+	for {
+		var message string
+		if err := websocket.Message.Receive(c.websocket, &message); err != nil {
+			c.server.disconnect <- c
+			break // Error recieving, likely an EOF/disconnect, exit the loop
+		}
+		// Procccess message *currently* by echoing to all.
+		c.server.broadcast <- message
+	}
+}
+func (c *Client) Write() {
+	for message := range c.send {
+		websocket.Message.Send(c.websocket, message)
+	}
+}
+
+func (c *Client) Close() {
+	close(c.send)
+	_ = c.websocket.Close()
 }
 
 // SocketServer holds all of the connected clients
 type SocketServer struct {
-	clients map[Client]struct{}
+	clients    map[Client]struct{}
+	broadcast  chan string
+	connect    chan *Client
+	disconnect chan *Client
 }
 
 // New creates a new SocketServer
-func New() http.Handler {
-	s := SocketServer{make(map[Client]struct{})}
-	return websocket.Handler(func(ws *websocket.Conn) {
-		var message string
-		defer func() { _ = ws.Close() }()
-		client := Client{ws, ws.Request().RemoteAddr}
-		s.clients[client] = struct{}{}
+func New() SocketServer {
+	s := SocketServer{
+		make(map[Client]struct{}),
+		make(chan string),
+		make(chan *Client),
+		make(chan *Client),
+	}
+	go func() {
 		for {
-			if err := websocket.Message.Receive(client.websocket, &message); err != nil {
-				delete(s.clients, client)
-				break
-			}
-			// Procccess message by echoing to all.
-			for client := range s.clients {
-				if err := websocket.Message.Send(client.websocket, client.clientIP+message); err != nil {
-					log.Printf("Can't send %v\n", err)
+			select {
+			case client := <-s.connect:
+				s.clients[*client] = struct{}{}
+			case client := <-s.disconnect:
+				if _, ok := s.clients[*client]; ok {
+					delete(s.clients, *client)
+					client.Close()
+				}
+			case message := <-s.broadcast:
+				for client := range s.clients {
+					client.send <- message
 				}
 			}
 		}
+	}()
+	return s
+}
+
+func (s *SocketServer) Handler() http.Handler {
+	return websocket.Handler(func(ws *websocket.Conn) {
+		client := &Client{s, ws, make(chan string)}
+		s.connect <- client
+		go client.Write()
+		client.Read()
 	})
 }
 
@@ -52,9 +92,18 @@ func resolveAddress() string {
 }
 
 func main() {
+	socketServer := New()
+
+	//go func() {
+	//	c := time.Tick(10 * time.Second)
+	//	for range c {
+	//		socketServer.broadcast <- time.Now().String()
+	//	}
+	//}()
+
 	http.Handle("/", http.FileServer(http.Dir("./static")))
-	http.Handle("/socket", New())
+	http.Handle("/socket", socketServer.Handler())
 
 	server := &http.Server{Addr: resolveAddress()}
-	log.Println(server.ListenAndServe())
+	log.Fatal(server.ListenAndServe())
 }
