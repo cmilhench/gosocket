@@ -4,80 +4,59 @@ VERSION    ?= 0.0.0-dev
 PORT       ?= 12345 
 GO         ?= go
 
-commands=deps start test dev
+default: help
+.PHONY: default
 
-# Usage documentation 
-usage:
-	@printf "Commands: "
-	@for command in $(commands); do \
-		printf "\033[34m $$command\033[0m,"; done
-	@printf "\b \n"
-.PHONY: usage
+help: # This
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
+		awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
+.PHONY: help
 
-# Install the required dependencies
-install.deps:
-	@echo "==> Install dep"
-	@$(GO) get -u github.com/golang/dep/cmd/dep
+deps: ## Install dependencies
 	@echo "==> Install dependencies"
-	@dep ensure
-.PHONY: install.deps
-
-# Install all the dependencies
-deps:
-	@echo "==> Install dependencies"
-	@dep ensure
+	@go mod tidy
 .PHONY: deps
 
-# Start the service
-start:
+lint:
+	$(call cyan, "Linting...")
+	$(call check-dependency,golint)
+	@golint ./... | grep -v unexported || true
+	@go vet ./... 2>&1 || echo ''
+.PHONY: lint
+
+test: lint
+	$(call cyan, "Testing...")
+	@VERSION=$(VERSION) \
+	  PORT=$(PORT) \
+	  HOST=$(HOST) \
+	  $(GO) test -short -cover ./... && echo "\n==>\033[32m Ok\033[m\n"
+.PHONY: test
+
+start: test ## Run locally
+	$(call cyan, "Running...")
 	@VERSION=$(VERSION) \
 	  PORT=$(PORT) \
 	  $(GO) run main.go
 .PHONY: start
 
-# Build all files.
-build:
-	@$(GO) build -o server ./...
-.PHONY: build
+watch: ## Run locally and monitor for changes
+	$(call check-dependency,entr)
+	@find . -type f -not -path './vendor/*' -a -not -path '*/\.*' -a -not -path './docs/*' \
+	| entr -rcs 'make start -f ./Makefile'
+.PHONY: watch
 
-# Build so the binary can be deployed.
-build.up:
-	@GOOS=linux GOARCH=amd64 $(GO) build -o server ./...
-.PHONY: build
-# Deploy to up
-deploy:
-	@echo "==> Deploying..."
-	@echo "==> TK"
-	@echo "==> Done"
-.PHONY: deploy
+define check-dependency
+	$(if $(shell command -v $(1)),,$(error Make sure $(1) is installed))
+endef
 
-# Run tests.
-test:
-	@VERSION=$(VERSION) \
-	  PORT=$(PORT) \
-	  HOST=$(HOST) \
-	  $(GO) test -cover ./... && echo "\n==>\033[32m Ok\033[m\n"
-.PHONY: test
+define red
+	@tput setaf 1
+	@echo $1
+	@tput sgr0
+endef
 
-# Run all tests.
-test_all:
-	@VERSION=$(VERSION) \
-	  PORT=$(PORT) \
-	  HOST=$(HOST) \
-	  $(GO) test -tags intergration -v -cover ./... && echo "\n==>\033[32m Ok\033[m\n"
-.PHONY: test_all
-
-# Development environment helpers
-vim:
-	@vim `find . -name '*.go' -not -path './vendor/*' -or -name 'Makefile'`
-.PHONY: vim
-
-dev:
-	@find . -name '*.go' -not -path './vendor/*' | entr -rcs 'make test && make start'
-.PHONY: dev
-
-# Clean.
-#clean:
-# 	#@rm -fr dist
-# 	@git clean -f
-#.PHONY: clean
+define cyan
+	@tput setaf 6
+	@echo $1
+	@tput sgr0
+endef
